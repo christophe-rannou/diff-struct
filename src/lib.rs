@@ -14,23 +14,23 @@ pub trait Diff: Sized {
     type Repr;
 
     /// Produces a diff between two structs
-    fn diff(&self, other: &Self) -> Self::Repr;
+    fn diff(&self, other: &Self) -> Change<Self::Repr>;
 
     /// Produces a diff between two structs, using an external diffing implementation
-    fn diff_custom<D: Differ<Self>>(&self, other: &Self, visitor: &D) -> D::Repr {
+    fn diff_custom<D: Differ<Self>>(&self, other: &Self, visitor: &D) -> Change<D::Repr> {
         visitor.diff(self, other)
     }
 
     /// Applies the diff directly to the struct
-    fn apply(&mut self, diff: &Self::Repr);
+    fn apply(&mut self, diff: &Change<Self::Repr>);
 
     /// Applies the diff directly to the struct, using an external diffing implementation
-    fn apply_custom<D: Differ<Self>>(&mut self, diff: &D::Repr, visitor: &D) {
+    fn apply_custom<D: Differ<Self>>(&mut self, diff: &Change<D::Repr>, visitor: &D) {
         visitor.apply(self, diff)
     }
 
     /// Applies the diff to the struct and produces a new struct
-    fn apply_new(&self, diff: &Self::Repr) -> Self {
+    fn apply_new(&self, diff: &Change<Self::Repr>) -> Self {
         let mut new = Self::identity();
         new.apply(&new.diff(self));
         new.apply(diff);
@@ -38,7 +38,7 @@ pub trait Diff: Sized {
     }
 
     /// Applies the diff to the struct and produces a new struct, using an external diffing implementation
-    fn apply_new_custom<D: Differ<Self>>(&self, diff: &D::Repr, visitor: &D) -> Self {
+    fn apply_new_custom<D: Differ<Self>>(&self, diff: &Change<D::Repr>, visitor: &D) -> Self {
         let mut new = Self::identity();
         new.apply_custom(&new.diff_custom(self, visitor), visitor);
         new.apply_custom(diff, visitor);
@@ -60,7 +60,7 @@ pub trait Diff: Sized {
 pub trait Differ<T> {
     type Repr;
 
-    fn diff(&self, a: &T, b: &T) -> Self::Repr;
+    fn diff(&self, a: &T, b: &T) -> Change<Self::Repr>;
 
-    fn apply(&self, a: &mut T, b: &Self::Repr);
+    fn apply(&self, a: &mut T, b: &Change<Self::Repr>);
 }

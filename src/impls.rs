@@ -11,20 +11,36 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-impl Diff for bool {
-    type Repr = Option<bool>;
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub enum Change<T> {
+    Change(T),
+    NoChange,
+}
 
-    fn diff(&self, other: &Self) -> Self::Repr {
+impl<T> Change<T> {
+    pub fn no_change(&self) -> bool {
+        match self {
+            Change::NoChange => true,
+            _ => false,
+        }
+    }
+}
+
+impl Diff for bool {
+    type Repr = bool;
+
+    fn diff(&self, other: &Self) -> Change<Self::Repr> {
         if self != other {
-            Some(*other)
+            Change::Change(*other)
         } else {
-            None
+            Change::NoChange
         }
     }
 
-    fn apply(&mut self, diff: &Self::Repr) {
-        if let Some(diff) = diff {
-            *self = *diff;
+    fn apply(&mut self, diff: &Change<Self::Repr>) {
+        match diff {
+            Change::Change(diff) => *self = *diff,
+            Change::NoChange => {}
         }
     }
 
@@ -39,11 +55,11 @@ where
 {
     type Repr = T::Repr;
 
-    fn diff(&self, other: &Self) -> Self::Repr {
+    fn diff(&self, other: &Self) -> Change<Self::Repr> {
         self.deref().diff(other.deref())
     }
 
-    fn apply(&mut self, diff: &Self::Repr) {
+    fn apply(&mut self, diff: &Change<Self::Repr>) {
         match Arc::get_mut(self) {
             Some(m) => m.apply(diff),
             None => {
@@ -63,14 +79,17 @@ impl<T> Diff for Box<T>
 where
     T: Diff,
 {
-    type Repr = Box<T::Repr>;
+    type Repr = Box<Change<T::Repr>>;
 
-    fn diff(&self, other: &Self) -> Self::Repr {
-        Box::new(self.deref().diff(other.deref()))
+    fn diff(&self, other: &Self) -> Change<Self::Repr> {
+        Change::Change(Box::new(self.deref().diff(other.deref())))
     }
 
-    fn apply(&mut self, diff: &Self::Repr) {
-       self.as_mut().apply(diff.as_ref())
+    fn apply(&mut self, diff: &Change<Self::Repr>) {
+        match diff {
+            Change::Change(diff) => self.as_mut().apply(diff.as_ref()),
+            Change::NoChange => {}
+        }
     }
 
     fn identity() -> Self {
@@ -84,11 +103,11 @@ where
 {
     type Repr = T::Repr;
 
-    fn diff(&self, other: &Self) -> Self::Repr {
+    fn diff(&self, other: &Self) -> Change<Self::Repr> {
         self.deref().diff(other.deref())
     }
 
-    fn apply(&mut self, diff: &Self::Repr) {
+    fn apply(&mut self, diff: &Change<Self::Repr>) {
         match Rc::get_mut(self) {
             Some(m) => m.apply(diff),
             None => {
@@ -109,14 +128,24 @@ macro_rules! diff_tuple {
         impl<$($ty),*> Diff for ($($ty),*,)
             where $($ty: Diff),*
         {
-            type Repr = ($(<$ty>::Repr),*,);
+            type Repr = ($(Change<<$ty>::Repr>),*,);
 
-            fn diff(&self, other: &Self) -> Self::Repr {
-                ($(self.$access.diff(&other.$access)),*,)
+            fn diff(&self, other: &Self) -> Change<Self::Repr> {
+                let diff_repr = ($(self.$access.diff(&other.$access)),*,);
+                if $(diff_repr.$access.no_change())&&* {
+                    Change::NoChange
+                } else {
+                    Change::Change(diff_repr)
+                }
             }
 
-            fn apply(&mut self, diff: &Self::Repr) {
-                $(self.$access.apply(&diff.$access));*;
+            fn apply(&mut self, diff: &Change<Self::Repr>) {
+                match diff {
+                    Change::Change(diff) => {
+                        $(self.$access.apply(&diff.$access));*;
+                    }
+                    Change::NoChange => {}
+                }
             }
 
             fn identity() -> Self {
@@ -177,12 +206,20 @@ macro_rules! diff_int {
         $(impl Diff for $ty {
             type Repr = $ty;
 
-            fn diff(&self, other: &Self) -> Self::Repr {
-                other.wrapping_sub(*self)
+            fn diff(&self, other: &Self) -> Change<Self::Repr> {
+                let value = other.wrapping_sub(*self);
+                if value != 0 {
+                    Change::Change(value)
+                } else {
+                    Change::NoChange
+                }
             }
 
-            fn apply(&mut self, diff: &Self::Repr) {
-                *self = self.wrapping_add(*diff);
+            fn apply(&mut self, diff: &Change<Self::Repr>) {
+                match diff {
+                    Change::Change(diff) => *self = self.wrapping_add(*diff),
+                    Change::NoChange => {}
+                }
             }
 
             fn identity() -> $ty {
@@ -197,12 +234,20 @@ macro_rules! diff_float {
         $(impl Diff for $ty {
             type Repr = $ty;
 
-            fn diff(&self, other: &Self) -> Self::Repr {
-                other - self
+            fn diff(&self, other: &Self) -> Change<Self::Repr> {
+                let value = other - self;
+                if value != 0.0 {
+                    Change::Change(value)
+                } else {
+                    Change::NoChange
+                }
             }
 
-            fn apply(&mut self, diff: &Self::Repr){
-                *self += diff;
+            fn apply(&mut self, diff: &Change<Self::Repr>){
+                match diff {
+                    Change::Change(diff) => *self += diff,
+                    Change::NoChange => {}
+                }
             }
 
             fn identity() -> $ty {
@@ -220,12 +265,20 @@ macro_rules! diff_non_zero_int {
         $(impl Diff for $ty {
             type Repr = $original;
 
-            fn diff(&self, other: &Self) -> Self::Repr {
-                other.get().wrapping_sub(self.get())
+            fn diff(&self, other: &Self) -> Change<Self::Repr> {
+                let value = other.get().wrapping_sub(self.get());
+                if value != 0 {
+                    Change::Change(value)
+                } else {
+                    Change::NoChange
+                }
             }
 
-            fn apply(&mut self, diff: &Self::Repr) {
-                *self = <$ty>::new(self.get() + *diff).unwrap();
+            fn apply(&mut self, diff: &Change<Self::Repr>) {
+                match diff {
+                    Change::Change(diff) => *self = <$ty>::new(self.get() + *diff).unwrap(),
+                    Change::NoChange => {}
+                }
             }
 
             fn identity() -> $ty {
@@ -249,19 +302,20 @@ diff_non_zero_int!(NonZeroUsize, usize);
 diff_float!(f32, f64);
 
 impl Diff for char {
-    type Repr = Option<char>;
+    type Repr = char;
 
-    fn diff(&self, other: &Self) -> Self::Repr {
+    fn diff(&self, other: &Self) -> Change<Self::Repr> {
         if self != other {
-            Some(*other)
+            Change::Change(*other)
         } else {
-            None
+            Change::NoChange
         }
     }
 
-    fn apply(&mut self, diff: &Self::Repr) {
-        if let Some(diff) = diff {
-            *self = *diff
+    fn apply(&mut self, diff: &Change<Self::Repr>) {
+        match diff {
+            Change::Change(diff) => *self = *diff,
+            Change::NoChange => {}
         }
     }
 
@@ -271,19 +325,20 @@ impl Diff for char {
 }
 
 impl Diff for String {
-    type Repr = Option<String>;
+    type Repr = String;
 
-    fn diff(&self, other: &Self) -> Self::Repr {
+    fn diff(&self, other: &Self) -> Change<Self::Repr> {
         if self != other {
-            Some(other.clone())
+            Change::Change(other.clone())
         } else {
-            None
+            Change::NoChange
         }
     }
 
-    fn apply(&mut self, diff: &Self::Repr) {
-        if let Some(diff) = diff {
-            *self = diff.clone()
+    fn apply(&mut self, diff: &Change<Self::Repr>) {
+        match diff {
+            Change::Change(diff) => *self = diff.clone(),
+            Change::NoChange => {}
         }
     }
 
@@ -293,19 +348,20 @@ impl Diff for String {
 }
 
 impl Diff for PathBuf {
-    type Repr = Option<PathBuf>;
+    type Repr = PathBuf;
 
-    fn diff(&self, other: &Self) -> Self::Repr {
+    fn diff(&self, other: &Self) -> Change<Self::Repr> {
         if self != other {
-            Some(other.clone())
+            Change::Change(other.clone())
         } else {
-            None
+            Change::NoChange
         }
     }
 
-    fn apply(&mut self, diff: &Self::Repr) {
-        if let Some(diff) = diff {
-            *self = diff.clone()
+    fn apply(&mut self, diff: &Change<Self::Repr>) {
+        match diff {
+            Change::Change(diff) => *self = diff.clone(),
+            Change::NoChange => {}
         }
     }
 
@@ -315,19 +371,20 @@ impl Diff for PathBuf {
 }
 
 impl<'a> Diff for &'a str {
-    type Repr = Option<&'a str>;
+    type Repr = &'a str;
 
-    fn diff(&self, other: &Self) -> Self::Repr {
+    fn diff(&self, other: &Self) -> Change<Self::Repr> {
         if self != other {
-            Some(other)
+            Change::Change(other)
         } else {
-            None
+            Change::NoChange
         }
     }
 
-    fn apply(&mut self, diff: &Self::Repr) {
-        if let Some(diff) = diff {
-            *self = diff
+    fn apply(&mut self, diff: &Change<Self::Repr>) {
+        match diff {
+            Change::Change(diff) => *self = diff,
+            Change::NoChange => {}
         }
     }
 
@@ -344,19 +401,20 @@ where
     /// Note: This was done to make sure a diff is able to outlive its sources,
     /// which is the most desirable outcome if the diff is to be moved around
     /// and consumed much later (or even serialized into foreign programs)
-    type Repr = Option<<T as ToOwned>::Owned>;
+    type Repr = <T as ToOwned>::Owned;
 
-    fn diff(&self, other: &Self) -> Self::Repr {
+    fn diff(&self, other: &Self) -> Change<Self::Repr> {
         if self != other {
-            Some(other.clone().into_owned())
+            Change::Change(other.clone().into_owned())
         } else {
-            None
+            Change::NoChange
         }
     }
 
-    fn apply(&mut self, diff: &Self::Repr) {
-        if let Some(diff) = diff {
-            *self = Cow::Owned(diff.clone())
+    fn apply(&mut self, diff: &Change<Self::Repr>) {
+        match diff {
+            Change::Change(diff) => *self = Cow::Owned(diff.clone()),
+            Change::NoChange => {}
         }
     }
 
@@ -365,42 +423,37 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum OptionDiff<T: Diff> {
-    Some(T::Repr),
-    None,
-    NoChange,
-}
-
 impl<T: Diff + PartialEq> Diff for Option<T> {
-    type Repr = OptionDiff<T>;
+    type Repr = Option<Change<T::Repr>>;
 
-    fn diff(&self, other: &Self) -> Self::Repr {
+    fn diff(&self, other: &Self) -> Change<Self::Repr> {
         match (self, other) {
             (Some(value), Some(other_value)) => {
                 if value == other_value {
-                    OptionDiff::NoChange
+                    Change::NoChange
                 } else {
-                    OptionDiff::Some(value.diff(other_value))
+                    Change::Change(Some(value.diff(other_value)))
                 }
             }
-            (Some(_), None) => OptionDiff::None,
-            (None, Some(other_value)) => OptionDiff::Some(T::identity().diff(other_value)),
-            (None, None) => OptionDiff::NoChange,
+            (Some(_), None) => Change::Change(None),
+            (None, Some(other_value)) => Change::Change(Some(T::identity().diff(other_value))),
+            (None, None) => Change::NoChange,
         }
     }
 
-    fn apply(&mut self, diff: &Self::Repr) {
+    fn apply(&mut self, diff: &Change<Self::Repr>) {
         match diff {
-            OptionDiff::None => *self = None,
-            OptionDiff::Some(change) => {
-                if let Some(value) = self {
-                    value.apply(change);
-                } else {
-                    *self = Some(T::identity().apply_new(change))
+            Change::Change(diff) => match diff {
+                Some(change) => {
+                    if let Some(value) = self {
+                        value.apply(change);
+                    } else {
+                        *self = Some(T::identity().apply_new(change))
+                    }
                 }
-            }
-            _ => {}
+                None => *self = None,
+            },
+            Change::NoChange => {}
         }
     }
 
@@ -409,606 +462,566 @@ impl<T: Diff + PartialEq> Diff for Option<T> {
     }
 }
 
-impl<T: Diff> Debug for OptionDiff<T>
-where
-    T::Repr: Debug,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match &self {
-            OptionDiff::Some(change) => f.debug_tuple("Some").field(change).finish(),
-            OptionDiff::None => write!(f, "None"),
-            OptionDiff::NoChange => write!(f, "NoChange"),
-        }
-    }
-}
+// /// The diff struct used to compare two [HashMap]'s
+// #[derive(Serialize, Deserialize)]
+// #[serde(bound(serialize = "V::Repr: Serialize, K: Serialize"))]
+// #[serde(bound(deserialize = "V::Repr: Deserialize<'de>, K: Deserialize<'de>"))]
+// pub struct HashMapDiff<K: Hash + Eq, V: Diff> {
+//     /// Values that are changed or added
+//     pub altered: HashMap<K, <V as Diff>::Repr>,
+//     /// Values that are removed
+//     pub removed: HashSet<K>,
+// }
 
-impl<T: Diff> PartialEq for OptionDiff<T>
-where
-    T::Repr: PartialEq,
-{
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (OptionDiff::Some(a), OptionDiff::Some(b)) => a == b,
-            (OptionDiff::None, OptionDiff::None) => true,
-            (OptionDiff::NoChange, OptionDiff::NoChange) => true,
-            _ => false,
-        }
-    }
-}
+// /// The diff struct used to compare two [BTreeMap]'s
+// #[derive(Serialize, Deserialize)]
+// #[serde(bound(serialize = "V::Repr: Serialize, K: Serialize"))]
+// #[serde(bound(deserialize = "V::Repr: Deserialize<'de>, K: Deserialize<'de>"))]
+// pub struct BTreeMapDiff<K: Ord + Eq, V: Diff> {
+//     /// Values that are changed or added
+//     pub altered: BTreeMap<K, <V as Diff>::Repr>,
+//     /// Values that are removed
+//     pub removed: BTreeSet<K>,
+// }
 
-impl<T: Diff> Clone for OptionDiff<T>
-where
-    T::Repr: Clone,
-{
-    fn clone(&self) -> Self {
-        match self {
-            OptionDiff::Some(a) => OptionDiff::Some(a.clone()),
-            OptionDiff::None => OptionDiff::None,
-            OptionDiff::NoChange => OptionDiff::NoChange,
-        }
-    }
-}
+// macro_rules! diff_map {
+//     ($ty: ident, $diffty: ident, $diffkey: ident, ($($constraints:tt)*)) => {
+//         impl<K: $($constraints)*, V: Diff> Diff for $ty<K, V>
+//         where
+//             K: Clone,
+//             V: PartialEq,
+//         {
+//             type Repr = $diffty<K, V>;
 
-/// The diff struct used to compare two [HashMap]'s
-#[derive(Serialize, Deserialize)]
-#[serde(bound(serialize = "V::Repr: Serialize, K: Serialize"))]
-#[serde(bound(deserialize = "V::Repr: Deserialize<'de>, K: Deserialize<'de>"))]
-pub struct HashMapDiff<K: Hash + Eq, V: Diff> {
-    /// Values that are changed or added
-    pub altered: HashMap<K, <V as Diff>::Repr>,
-    /// Values that are removed
-    pub removed: HashSet<K>,
-}
+//             fn diff(&self, other: &Self) -> Change<Self::Repr> {
+//                 let mut diff = $diffty {
+//                     altered: $ty::new(),
+//                     removed: $diffkey::new(),
+//                 };
+//                 // can we do better than this?
+//                 for (key, value) in self {
+//                     if let Some(other_value) = other.get(key) {
+//                         // don't store values that don't change
+//                         if value != other_value {
+//                             diff.altered.insert(key.clone(), value.diff(other_value));
+//                         }
+//                     } else {
+//                         diff.removed.insert(key.clone());
+//                     }
+//                 }
+//                 for (key, value) in other {
+//                     if let None = self.get(key) {
+//                         diff.altered.insert(key.clone(), V::identity().diff(value));
+//                     }
+//                 }
+//                 diff
+//             }
 
-/// The diff struct used to compare two [BTreeMap]'s
-#[derive(Serialize, Deserialize)]
-#[serde(bound(serialize = "V::Repr: Serialize, K: Serialize"))]
-#[serde(bound(deserialize = "V::Repr: Deserialize<'de>, K: Deserialize<'de>"))]
-pub struct BTreeMapDiff<K: Ord + Eq, V: Diff> {
-    /// Values that are changed or added
-    pub altered: BTreeMap<K, <V as Diff>::Repr>,
-    /// Values that are removed
-    pub removed: BTreeSet<K>,
-}
+//             // basically inexpensive
+//             fn apply(&mut self, diff: &Change<Self::Repr>) {
+//                 diff.removed.iter().for_each(|del| {
+//                     self.remove(del);
+//                 });
+//                 for (key, change) in &diff.altered {
+//                     if let Some(original) = self.get_mut(key) {
+//                         original.apply(change);
+//                     } else {
+//                         self.insert(key.clone(), V::identity().apply_new(change));
+//                     }
+//                 }
+//             }
 
-macro_rules! diff_map {
-    ($ty: ident, $diffty: ident, $diffkey: ident, ($($constraints:tt)*)) => {
-        impl<K: $($constraints)*, V: Diff> Diff for $ty<K, V>
-        where
-            K: Clone,
-            V: PartialEq,
-        {
-            type Repr = $diffty<K, V>;
+//             fn identity() -> Self {
+//                 $ty::new()
+//             }
+//         }
 
-            fn diff(&self, other: &Self) -> Self::Repr {
-                let mut diff = $diffty {
-                    altered: $ty::new(),
-                    removed: $diffkey::new(),
-                };
-                // can we do better than this?
-                for (key, value) in self {
-                    if let Some(other_value) = other.get(key) {
-                        // don't store values that don't change
-                        if value != other_value {
-                            diff.altered.insert(key.clone(), value.diff(other_value));
-                        }
-                    } else {
-                        diff.removed.insert(key.clone());
-                    }
-                }
-                for (key, value) in other {
-                    if let None = self.get(key) {
-                        diff.altered.insert(key.clone(), V::identity().diff(value));
-                    }
-                }
-                diff
-            }
+//         impl<K: $($constraints)*, V: Diff> Debug for $diffty<K, V>
+//         where
+//             K: Debug,
+//             V::Repr: Debug,
+//         {
+//             fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+//                 f.debug_struct(stringify!($diffty))
+//                     .field("altered", &self.altered)
+//                     .field("removed", &self.removed)
+//                     .finish()
+//             }
+//         }
 
-            // basically inexpensive
-            fn apply(&mut self, diff: &Self::Repr) {
-                diff.removed.iter().for_each(|del| {
-                    self.remove(del);
-                });
-                for (key, change) in &diff.altered {
-                    if let Some(original) = self.get_mut(key) {
-                        original.apply(change);
-                    } else {
-                        self.insert(key.clone(), V::identity().apply_new(change));
-                    }
-                }
-            }
+//         impl<K: $($constraints)*, V: Diff> PartialEq for $diffty<K, V>
+//         where
+//             V::Repr: PartialEq,
+//         {
+//             fn eq(&self, other: &Self) -> bool {
+//                 self.altered == other.altered && self.removed == other.removed
+//             }
+//         }
 
-            fn identity() -> Self {
-                $ty::new()
-            }
-        }
+//         impl<K: $($constraints)*, V: Diff> Clone for $diffty<K, V>
+//         where
+//             K: Clone,
+//             V::Repr: Clone,
+//         {
+//             fn clone(&self) -> Self {
+//                 $diffty {
+//                     altered: self.altered.clone(),
+//                     removed: self.removed.clone(),
+//                 }
+//             }
+//         }
+//     }
+// }
 
-        impl<K: $($constraints)*, V: Diff> Debug for $diffty<K, V>
-        where
-            K: Debug,
-            V::Repr: Debug,
-        {
-            fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-                f.debug_struct(stringify!($diffty))
-                    .field("altered", &self.altered)
-                    .field("removed", &self.removed)
-                    .finish()
-            }
-        }
+// diff_map!(HashMap, HashMapDiff, HashSet, (Hash + Eq));
+// diff_map!(BTreeMap, BTreeMapDiff, BTreeSet, (Ord));
 
-        impl<K: $($constraints)*, V: Diff> PartialEq for $diffty<K, V>
-        where
-            V::Repr: PartialEq,
-        {
-            fn eq(&self, other: &Self) -> bool {
-                self.altered == other.altered && self.removed == other.removed
-            }
-        }
+// /// The diff struct used to compare two [HashSet]'s
+// #[derive(Serialize, Deserialize)]
+// #[serde(bound(serialize = "T: Serialize"))]
+// #[serde(bound(deserialize = "T: Deserialize<'de>"))]
+// pub struct HashSetDiff<T: Hash + Eq> {
+//     /// Values that are added
+//     pub added: HashSet<T>,
+//     /// Values that are removed
+//     pub removed: HashSet<T>,
+// }
 
-        impl<K: $($constraints)*, V: Diff> Clone for $diffty<K, V>
-        where
-            K: Clone,
-            V::Repr: Clone,
-        {
-            fn clone(&self) -> Self {
-                $diffty {
-                    altered: self.altered.clone(),
-                    removed: self.removed.clone(),
-                }
-            }
-        }
-    }
-}
+// /// The diff struct used to compare two [BTreeMap]'s
+// #[derive(Serialize, Deserialize)]
+// #[serde(bound(serialize = "T: Serialize"))]
+// #[serde(bound(deserialize = "T: Deserialize<'de>"))]
+// pub struct BTreeSetDiff<T: Ord + Eq> {
+//     /// Values that are added
+//     pub added: BTreeSet<T>,
+//     /// Values that are removed
+//     pub removed: BTreeSet<T>,
+// }
 
-diff_map!(HashMap, HashMapDiff, HashSet, (Hash + Eq));
-diff_map!(BTreeMap, BTreeMapDiff, BTreeSet, (Ord));
+// macro_rules! diff_set {
+//     ($ty: ident, $diffty: ident, $diffkey: ident, ($($constraints:tt)*)) => {
+//         impl<T: $($constraints)*> Diff for $ty<T>
+//         where
+//             T: Clone,
+//         {
+//             type Repr = $diffty<T>;
 
-/// The diff struct used to compare two [HashSet]'s
-#[derive(Serialize, Deserialize)]
-#[serde(bound(serialize = "T: Serialize"))]
-#[serde(bound(deserialize = "T: Deserialize<'de>"))]
-pub struct HashSetDiff<T: Hash + Eq> {
-    /// Values that are added
-    pub added: HashSet<T>,
-    /// Values that are removed
-    pub removed: HashSet<T>,
-}
+//             fn diff(&self, other: &Self) -> Change<Self::Repr> {
+//                 let mut diff = $diffty {
+//                     added: $diffkey::new(),
+//                     removed: $diffkey::new(),
+//                 };
+//                 for value in self {
+//                     if !other.contains(value) {
+//                         diff.removed.insert(value.clone());
+//                     }
+//                 }
+//                 for value in other {
+//                     if !self.contains(value) {
+//                         diff.added.insert(value.clone());
+//                     }
+//                 }
+//                 diff
+//             }
 
-/// The diff struct used to compare two [BTreeMap]'s
-#[derive(Serialize, Deserialize)]
-#[serde(bound(serialize = "T: Serialize"))]
-#[serde(bound(deserialize = "T: Deserialize<'de>"))]
-pub struct BTreeSetDiff<T: Ord + Eq> {
-    /// Values that are added
-    pub added: BTreeSet<T>,
-    /// Values that are removed
-    pub removed: BTreeSet<T>,
-}
+//             // basically inexpensive
+//             fn apply(&mut self, diff: &Change<Self::Repr>) {
+//                 diff.removed.iter().for_each(|del| {
+//                     self.remove(del);
+//                 });
+//                 diff.added.iter().for_each(|add| {
+//                     self.insert(add.clone());
+//                 });
+//             }
 
-macro_rules! diff_set {
-    ($ty: ident, $diffty: ident, $diffkey: ident, ($($constraints:tt)*)) => {
-        impl<T: $($constraints)*> Diff for $ty<T>
-        where
-            T: Clone,
-        {
-            type Repr = $diffty<T>;
+//             fn identity() -> Self {
+//                 $ty::new()
+//             }
+//         }
 
-            fn diff(&self, other: &Self) -> Self::Repr {
-                let mut diff = $diffty {
-                    added: $diffkey::new(),
-                    removed: $diffkey::new(),
-                };
-                for value in self {
-                    if !other.contains(value) {
-                        diff.removed.insert(value.clone());
-                    }
-                }
-                for value in other {
-                    if !self.contains(value) {
-                        diff.added.insert(value.clone());
-                    }
-                }
-                diff
-            }
+//         impl<T: $($constraints)*> Debug for $diffty<T>
+//         where
+//             T: Debug,
+//         {
+//             fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+//                 f.debug_struct(stringify!($diffty))
+//                     .field("added", &self.added)
+//                     .field("removed", &self.removed)
+//                     .finish()
+//             }
+//         }
 
-            // basically inexpensive
-            fn apply(&mut self, diff: &Self::Repr) {
-                diff.removed.iter().for_each(|del| {
-                    self.remove(del);
-                });
-                diff.added.iter().for_each(|add| {
-                    self.insert(add.clone());
-                });
-            }
+//         impl<T: $($constraints)*> PartialEq for $diffty<T>
+//         where
+//             T: PartialEq,
+//         {
+//             fn eq(&self, other: &Self) -> bool {
+//                 self.added == other.added && self.removed == other.removed
+//             }
+//         }
 
-            fn identity() -> Self {
-                $ty::new()
-            }
-        }
+//         impl<T: $($constraints)*> Clone for $diffty<T>
+//         where
+//             T: Clone,
+//         {
+//             fn clone(&self) -> Self {
+//                 $diffty {
+//                     added: self.added.clone(),
+//                     removed: self.removed.clone(),
+//                 }
+//             }
+//         }
+//     }
+// }
 
-        impl<T: $($constraints)*> Debug for $diffty<T>
-        where
-            T: Debug,
-        {
-            fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-                f.debug_struct(stringify!($diffty))
-                    .field("added", &self.added)
-                    .field("removed", &self.removed)
-                    .finish()
-            }
-        }
+// diff_set!(HashSet, HashSetDiff, HashSet, (Hash + Eq));
+// diff_set!(BTreeSet, BTreeSetDiff, BTreeSet, (Ord));
 
-        impl<T: $($constraints)*> PartialEq for $diffty<T>
-        where
-            T: PartialEq,
-        {
-            fn eq(&self, other: &Self) -> bool {
-                self.added == other.added && self.removed == other.removed
-            }
-        }
+// /// The type of change to make to a vec
+// #[derive(Serialize, Deserialize)]
+// #[serde(bound(serialize = "T::Repr: Serialize"))]
+// #[serde(bound(deserialize = "T::Repr: Deserialize<'de>"))]
+// pub enum VecDiffType<T: Diff> {
+//     Removed { index: usize, len: usize },
+//     Altered { index: usize, changes: Vec<T::Repr> },
+//     Inserted { index: usize, changes: Vec<T::Repr> },
+// }
 
-        impl<T: $($constraints)*> Clone for $diffty<T>
-        where
-            T: Clone,
-        {
-            fn clone(&self) -> Self {
-                $diffty {
-                    added: self.added.clone(),
-                    removed: self.removed.clone(),
-                }
-            }
-        }
-    }
-}
+// /// The collection of difference-vec's
+// #[derive(Serialize, Deserialize)]
+// #[serde(bound(serialize = "T::Repr: Serialize"))]
+// #[serde(bound(deserialize = "T::Repr: Deserialize<'de>"))]
+// pub struct VecDiff<T: Diff>(pub Vec<VecDiffType<T>>);
 
-diff_set!(HashSet, HashSetDiff, HashSet, (Hash + Eq));
-diff_set!(BTreeSet, BTreeSetDiff, BTreeSet, (Ord));
+// impl<T: Diff + PartialEq> Diff for Vec<T> {
+//     type Repr = VecDiff<T>;
 
-/// The type of change to make to a vec
-#[derive(Serialize, Deserialize)]
-#[serde(bound(serialize = "T::Repr: Serialize"))]
-#[serde(bound(deserialize = "T::Repr: Deserialize<'de>"))]
-pub enum VecDiffType<T: Diff> {
-    Removed { index: usize, len: usize },
-    Altered { index: usize, changes: Vec<T::Repr> },
-    Inserted { index: usize, changes: Vec<T::Repr> },
-}
+//     fn diff(&self, other: &Self) -> Change<Self::Repr> {
+//         let mut changes = Vec::new();
+//         let mut pos_x = 0;
+//         let mut pos_y = 0;
+//         loop {
+//             let (is_match, deletions, insertions) = find_match(&self[pos_x..], &other[pos_y..]);
 
-/// The collection of difference-vec's
-#[derive(Serialize, Deserialize)]
-#[serde(bound(serialize = "T::Repr: Serialize"))]
-#[serde(bound(deserialize = "T::Repr: Deserialize<'de>"))]
-pub struct VecDiff<T: Diff>(pub Vec<VecDiffType<T>>);
+//             // TODO: simplify logic here
+//             if deletions == 0 || insertions == 0 {
+//                 if deletions > 0 {
+//                     changes.push(VecDiffType::Removed {
+//                         index: pos_x,
+//                         len: deletions,
+//                     });
+//                 } else if insertions > 0 {
+//                     changes.push(VecDiffType::Inserted {
+//                         index: pos_x,
+//                         changes: other[pos_y..pos_y + insertions]
+//                             .iter()
+//                             .map(|new| T::identity().diff(new))
+//                             .collect(),
+//                     });
+//                 }
+//             } else if deletions == insertions {
+//                 changes.push(VecDiffType::Altered {
+//                     index: pos_x,
+//                     changes: self[pos_x..pos_x + deletions]
+//                         .iter()
+//                         .zip(other[pos_y..pos_y + insertions].iter())
+//                         .map(|(a, b)| a.diff(b))
+//                         .collect(),
+//                 });
+//             } else if deletions > insertions {
+//                 changes.push(VecDiffType::Altered {
+//                     index: pos_x,
+//                     changes: self[pos_x..pos_x + insertions]
+//                         .iter()
+//                         .zip(other[pos_y..pos_y + insertions].iter())
+//                         .map(|(a, b)| a.diff(b))
+//                         .collect(),
+//                 });
+//                 changes.push(VecDiffType::Removed {
+//                     index: pos_x + insertions,
+//                     len: deletions - insertions,
+//                 });
+//             } else {
+//                 changes.push(VecDiffType::Altered {
+//                     index: pos_x,
+//                     changes: self[pos_x..pos_x + deletions]
+//                         .iter()
+//                         .zip(other[pos_y..pos_y + deletions].iter())
+//                         .map(|(a, b)| a.diff(b))
+//                         .collect(),
+//                 });
+//                 changes.push(VecDiffType::Inserted {
+//                     index: pos_x + deletions,
+//                     changes: other[pos_y + deletions..pos_y + insertions]
+//                         .iter()
+//                         .map(|new| T::identity().diff(new))
+//                         .collect(),
+//                 });
+//             }
 
-impl<T: Diff + PartialEq> Diff for Vec<T> {
-    type Repr = VecDiff<T>;
+//             if is_match {
+//                 pos_x += deletions + 1;
+//                 pos_y += insertions + 1;
+//             } else {
+//                 break;
+//             }
+//         }
+//         VecDiff(changes)
+//     }
 
-    fn diff(&self, other: &Self) -> Self::Repr {
-        let mut changes = Vec::new();
-        let mut pos_x = 0;
-        let mut pos_y = 0;
-        loop {
-            let (is_match, deletions, insertions) = find_match(&self[pos_x..], &other[pos_y..]);
+//     fn apply(&mut self, diff: &Change<Self::Repr>) {
+//         let mut relative_index = 0_isize;
+//         for change in &diff.0 {
+//             match change {
+//                 VecDiffType::Removed { index, len } => {
+//                     let index = (*index as isize + relative_index) as usize;
+//                     self.drain(index..index + len);
+//                     relative_index -= *len as isize;
+//                 }
+//                 VecDiffType::Inserted { index, changes } => {
+//                     let index = (*index as isize + relative_index) as usize;
+//                     self.splice(
+//                         index..index,
+//                         changes.iter().map(|d| T::identity().apply_new(d)),
+//                     );
+//                     relative_index += changes.len() as isize;
+//                 }
+//                 VecDiffType::Altered { index, changes } => {
+//                     let index = (*index as isize + relative_index) as usize;
+//                     let range = index..index + changes.len();
+//                     for (value, diff) in self[range].iter_mut().zip(changes.iter()) {
+//                         value.apply(diff);
+//                     }
+//                 }
+//             }
+//         }
+//     }
 
-            // TODO: simplify logic here
-            if deletions == 0 || insertions == 0 {
-                if deletions > 0 {
-                    changes.push(VecDiffType::Removed {
-                        index: pos_x,
-                        len: deletions,
-                    });
-                } else if insertions > 0 {
-                    changes.push(VecDiffType::Inserted {
-                        index: pos_x,
-                        changes: other[pos_y..pos_y + insertions]
-                            .iter()
-                            .map(|new| T::identity().diff(new))
-                            .collect(),
-                    });
-                }
-            } else if deletions == insertions {
-                changes.push(VecDiffType::Altered {
-                    index: pos_x,
-                    changes: self[pos_x..pos_x + deletions]
-                        .iter()
-                        .zip(other[pos_y..pos_y + insertions].iter())
-                        .map(|(a, b)| a.diff(b))
-                        .collect(),
-                });
-            } else if deletions > insertions {
-                changes.push(VecDiffType::Altered {
-                    index: pos_x,
-                    changes: self[pos_x..pos_x + insertions]
-                        .iter()
-                        .zip(other[pos_y..pos_y + insertions].iter())
-                        .map(|(a, b)| a.diff(b))
-                        .collect(),
-                });
-                changes.push(VecDiffType::Removed {
-                    index: pos_x + insertions,
-                    len: deletions - insertions,
-                });
-            } else {
-                changes.push(VecDiffType::Altered {
-                    index: pos_x,
-                    changes: self[pos_x..pos_x + deletions]
-                        .iter()
-                        .zip(other[pos_y..pos_y + deletions].iter())
-                        .map(|(a, b)| a.diff(b))
-                        .collect(),
-                });
-                changes.push(VecDiffType::Inserted {
-                    index: pos_x + deletions,
-                    changes: other[pos_y + deletions..pos_y + insertions]
-                        .iter()
-                        .map(|new| T::identity().diff(new))
-                        .collect(),
-                });
-            }
+//     fn identity() -> Self {
+//         Vec::new()
+//     }
+// }
 
-            if is_match {
-                pos_x += deletions + 1;
-                pos_y += insertions + 1;
-            } else {
-                break;
-            }
-        }
-        VecDiff(changes)
-    }
+// impl<T: Diff> Debug for VecDiffType<T>
+// where
+//     T::Repr: Debug,
+// {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+//         match self {
+//             VecDiffType::Removed { index, len } => f
+//                 .debug_struct("Removed")
+//                 .field("index", index)
+//                 .field("len", len)
+//                 .finish(),
+//             VecDiffType::Altered { index, changes } => f
+//                 .debug_struct("Altered")
+//                 .field("index", index)
+//                 .field("changes", changes)
+//                 .finish(),
+//             VecDiffType::Inserted { index, changes } => f
+//                 .debug_struct("Inserted")
+//                 .field("index", index)
+//                 .field("changes", changes)
+//                 .finish(),
+//         }
+//     }
+// }
 
-    fn apply(&mut self, diff: &Self::Repr) {
-        let mut relative_index = 0_isize;
-        for change in &diff.0 {
-            match change {
-                VecDiffType::Removed { index, len } => {
-                    let index = (*index as isize + relative_index) as usize;
-                    self.drain(index..index + len);
-                    relative_index -= *len as isize;
-                }
-                VecDiffType::Inserted { index, changes } => {
-                    let index = (*index as isize + relative_index) as usize;
-                    self.splice(
-                        index..index,
-                        changes.iter().map(|d| T::identity().apply_new(d)),
-                    );
-                    relative_index += changes.len() as isize;
-                }
-                VecDiffType::Altered { index, changes } => {
-                    let index = (*index as isize + relative_index) as usize;
-                    let range = index..index + changes.len();
-                    for (value, diff) in self[range].iter_mut().zip(changes.iter()) {
-                        value.apply(diff);
-                    }
-                }
-            }
-        }
-    }
+// impl<T: Diff> PartialEq for VecDiffType<T>
+// where
+//     T::Repr: PartialEq,
+// {
+//     fn eq(&self, other: &Self) -> bool {
+//         match (self, other) {
+//             (
+//                 VecDiffType::Removed { index, len },
+//                 VecDiffType::Removed {
+//                     index: ref index_,
+//                     len: ref len_,
+//                 },
+//             ) => index == index_ && len == len_,
+//             (
+//                 VecDiffType::Altered { index, changes },
+//                 VecDiffType::Altered {
+//                     index: ref index_,
+//                     changes: ref changes_,
+//                 },
+//             ) => index == index_ && changes == changes_,
+//             (
+//                 VecDiffType::Inserted { index, changes },
+//                 VecDiffType::Inserted {
+//                     index: ref index_,
+//                     changes: ref changes_,
+//                 },
+//             ) => index == index_ && changes == changes_,
+//             _ => false,
+//         }
+//     }
+// }
 
-    fn identity() -> Self {
-        Vec::new()
-    }
-}
+// impl<T: Diff> Clone for VecDiffType<T>
+// where
+//     T::Repr: Clone,
+// {
+//     fn clone(&self) -> Self {
+//         match self {
+//             VecDiffType::Removed { index, len } => VecDiffType::Removed {
+//                 index: *index,
+//                 len: *len,
+//             },
+//             VecDiffType::Altered { index, changes } => VecDiffType::Altered {
+//                 index: *index,
+//                 changes: changes.clone(),
+//             },
+//             VecDiffType::Inserted { index, changes } => VecDiffType::Inserted {
+//                 index: *index,
+//                 changes: changes.clone(),
+//             },
+//         }
+//     }
+// }
 
-impl<T: Diff> Debug for VecDiffType<T>
-where
-    T::Repr: Debug,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match self {
-            VecDiffType::Removed { index, len } => f
-                .debug_struct("Removed")
-                .field("index", index)
-                .field("len", len)
-                .finish(),
-            VecDiffType::Altered { index, changes } => f
-                .debug_struct("Altered")
-                .field("index", index)
-                .field("changes", changes)
-                .finish(),
-            VecDiffType::Inserted { index, changes } => f
-                .debug_struct("Inserted")
-                .field("index", index)
-                .field("changes", changes)
-                .finish(),
-        }
-    }
-}
+// impl<T: Diff> Debug for VecDiff<T>
+// where
+//     T::Repr: Debug,
+// {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+//         f.debug_list().entries(self.0.iter()).finish()
+//     }
+// }
 
-impl<T: Diff> PartialEq for VecDiffType<T>
-where
-    T::Repr: PartialEq,
-{
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                VecDiffType::Removed { index, len },
-                VecDiffType::Removed {
-                    index: ref index_,
-                    len: ref len_,
-                },
-            ) => index == index_ && len == len_,
-            (
-                VecDiffType::Altered { index, changes },
-                VecDiffType::Altered {
-                    index: ref index_,
-                    changes: ref changes_,
-                },
-            ) => index == index_ && changes == changes_,
-            (
-                VecDiffType::Inserted { index, changes },
-                VecDiffType::Inserted {
-                    index: ref index_,
-                    changes: ref changes_,
-                },
-            ) => index == index_ && changes == changes_,
-            _ => false,
-        }
-    }
-}
+// impl<T: Diff> PartialEq for VecDiff<T>
+// where
+//     T::Repr: PartialEq,
+// {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.0 == other.0
+//     }
+// }
 
-impl<T: Diff> Clone for VecDiffType<T>
-where
-    T::Repr: Clone,
-{
-    fn clone(&self) -> Self {
-        match self {
-            VecDiffType::Removed { index, len } => VecDiffType::Removed {
-                index: *index,
-                len: *len,
-            },
-            VecDiffType::Altered { index, changes } => VecDiffType::Altered {
-                index: *index,
-                changes: changes.clone(),
-            },
-            VecDiffType::Inserted { index, changes } => VecDiffType::Inserted {
-                index: *index,
-                changes: changes.clone(),
-            },
-        }
-    }
-}
+// impl<T: Diff> Clone for VecDiff<T>
+// where
+//     T::Repr: Clone,
+// {
+//     fn clone(&self) -> Self {
+//         Self(self.0.clone())
+//     }
+// }
 
-impl<T: Diff> Debug for VecDiff<T>
-where
-    T::Repr: Debug,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        f.debug_list().entries(self.0.iter()).finish()
-    }
-}
+// /// The type of change to make to an array
+// #[derive(Serialize, Deserialize)]
+// #[serde(bound(serialize = "T::Repr: Serialize"))]
+// #[serde(bound(deserialize = "T::Repr: Deserialize<'de>"))]
+// pub struct ArrayDiffType<T: Diff> {
+//     pub index: usize,
+//     pub change: T::Repr,
+// }
 
-impl<T: Diff> PartialEq for VecDiff<T>
-where
-    T::Repr: PartialEq,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
+// /// The collection of difference-vec's
+// #[derive(Serialize, Deserialize)]
+// #[serde(bound(serialize = "T::Repr: Serialize"))]
+// #[serde(bound(deserialize = "T::Repr: Deserialize<'de>"))]
+// pub struct ArrayDiff<T: Diff>(pub Vec<ArrayDiffType<T>>);
 
-impl<T: Diff> Clone for VecDiff<T>
-where
-    T::Repr: Clone,
-{
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
+// impl<T: Diff + PartialEq, const N: usize> Diff for [T; N] {
+//     type Repr = ArrayDiff<T>;
 
-/// The type of change to make to an array
-#[derive(Serialize, Deserialize)]
-#[serde(bound(serialize = "T::Repr: Serialize"))]
-#[serde(bound(deserialize = "T::Repr: Deserialize<'de>"))]
-pub struct ArrayDiffType<T: Diff> {
-    pub index: usize,
-    pub change: T::Repr,
-}
+//     fn diff(&self, other: &Self) -> Change<Self::Repr> {
+//         ArrayDiff(
+//             self.iter()
+//                 .zip(other.iter())
+//                 .enumerate()
+//                 .filter_map(|(index, (self_el, other_el))| {
+//                     self_el.ne(other_el).then(|| ArrayDiffType {
+//                         index,
+//                         change: self_el.diff(other_el),
+//                     })
+//                 })
+//                 .collect(),
+//         )
+//     }
 
-/// The collection of difference-vec's
-#[derive(Serialize, Deserialize)]
-#[serde(bound(serialize = "T::Repr: Serialize"))]
-#[serde(bound(deserialize = "T::Repr: Deserialize<'de>"))]
-pub struct ArrayDiff<T: Diff>(pub Vec<ArrayDiffType<T>>);
+//     fn apply(&mut self, diff: &Change<Self::Repr>) {
+//         for ArrayDiffType { index, change } in &diff.0 {
+//             self[*index].apply(change);
+//         }
+//     }
 
-impl<T: Diff + PartialEq, const N: usize> Diff for [T; N] {
-    type Repr = ArrayDiff<T>;
+//     fn identity() -> Self {
+//         std::array::from_fn(|_| T::identity())
+//     }
+// }
 
-    fn diff(&self, other: &Self) -> Self::Repr {
-        ArrayDiff(
-            self.iter()
-                .zip(other.iter())
-                .enumerate()
-                .filter_map(|(index, (self_el, other_el))| {
-                    self_el.ne(other_el).then(|| ArrayDiffType {
-                        index,
-                        change: self_el.diff(other_el),
-                    })
-                })
-                .collect(),
-        )
-    }
+// impl<T: Diff> Debug for ArrayDiffType<T>
+// where
+//     T::Repr: Debug,
+// {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+//         f.debug_struct("ArrayDiffType")
+//             .field("index", &self.index)
+//             .field("change", &self.change)
+//             .finish()
+//     }
+// }
 
-    fn apply(&mut self, diff: &Self::Repr) {
-        for ArrayDiffType { index, change } in &diff.0 {
-            self[*index].apply(change);
-        }
-    }
+// impl<T: Diff> PartialEq for ArrayDiffType<T>
+// where
+//     T::Repr: PartialEq,
+// {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.index == other.index && self.change == other.change
+//     }
+// }
 
-    fn identity() -> Self {
-        std::array::from_fn(|_| T::identity())
-    }
-}
+// impl<T: Diff> Clone for ArrayDiffType<T>
+// where
+//     T::Repr: Clone,
+// {
+//     fn clone(&self) -> Self {
+//         Self {
+//             index: self.index,
+//             change: self.change.clone(),
+//         }
+//     }
+// }
 
-impl<T: Diff> Debug for ArrayDiffType<T>
-where
-    T::Repr: Debug,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        f.debug_struct("ArrayDiffType")
-            .field("index", &self.index)
-            .field("change", &self.change)
-            .finish()
-    }
-}
+// impl<T: Diff> Debug for ArrayDiff<T>
+// where
+//     T::Repr: Debug,
+// {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+//         f.debug_list().entries(self.0.iter()).finish()
+//     }
+// }
 
-impl<T: Diff> PartialEq for ArrayDiffType<T>
-where
-    T::Repr: PartialEq,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.index == other.index && self.change == other.change
-    }
-}
+// impl<T: Diff> PartialEq for ArrayDiff<T>
+// where
+//     T::Repr: PartialEq,
+// {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.0 == other.0
+//     }
+// }
 
-impl<T: Diff> Clone for ArrayDiffType<T>
-where
-    T::Repr: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            index: self.index,
-            change: self.change.clone(),
-        }
-    }
-}
+// impl<T: Diff> Clone for ArrayDiff<T>
+// where
+//     T::Repr: Clone,
+// {
+//     fn clone(&self) -> Self {
+//         Self(self.0.clone())
+//     }
+// }
 
-impl<T: Diff> Debug for ArrayDiff<T>
-where
-    T::Repr: Debug,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        f.debug_list().entries(self.0.iter()).finish()
-    }
-}
+// impl<T> Diff for PhantomData<T> {
+//     type Repr = PhantomData<T>;
 
-impl<T: Diff> PartialEq for ArrayDiff<T>
-where
-    T::Repr: PartialEq,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
+//     fn diff(&self, _other: &Self) -> Change<Self::Repr> {
+//         PhantomData::default()
+//     }
 
-impl<T: Diff> Clone for ArrayDiff<T>
-where
-    T::Repr: Clone,
-{
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
+//     fn apply(&mut self, _diff: &Change<Self::Repr>) {}
 
-impl<T> Diff for PhantomData<T> {
-    type Repr = PhantomData<T>;
-
-    fn diff(&self, _other: &Self) -> Self::Repr {
-        PhantomData::default()
-    }
-
-    fn apply(&mut self, _diff: &Self::Repr) {}
-
-    fn identity() -> Self {
-        PhantomData::default()
-    }
-}
+//     fn identity() -> Self {
+//         PhantomData::default()
+//     }
+// }
