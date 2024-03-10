@@ -213,9 +213,8 @@ macro_rules! diff_int {
             type Repr = $ty;
 
             fn diff(&self, other: &Self) -> Change<Self::Repr> {
-                let value = other.wrapping_sub(*self);
-                if value != 0 {
-                    Change::Some(value)
+                if self != other {
+                    Change::Some(*other)
                 } else {
                     Change::None
                 }
@@ -223,7 +222,7 @@ macro_rules! diff_int {
 
             fn apply(&mut self, diff: &Change<Self::Repr>) {
                 match diff {
-                    Change::Some(diff) => *self = self.wrapping_add(*diff),
+                    Change::Some(diff) => *self = *diff,
                     Change::None => {}
                 }
             }
@@ -241,9 +240,8 @@ macro_rules! diff_float {
             type Repr = $ty;
 
             fn diff(&self, other: &Self) -> Change<Self::Repr> {
-                let value = other - self;
-                if value != 0.0 {
-                    Change::Some(value)
+                if self != other {
+                    Change::Some(*other)
                 } else {
                     Change::None
                 }
@@ -251,7 +249,7 @@ macro_rules! diff_float {
 
             fn apply(&mut self, diff: &Change<Self::Repr>){
                 match diff {
-                    Change::Some(diff) => *self += diff,
+                    Change::Some(diff) => *self = *diff,
                     Change::None => {}
                 }
             }

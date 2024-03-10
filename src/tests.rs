@@ -58,7 +58,7 @@ fn test_cow() {
 
 #[test]
 fn test_opt() {
-    assert_eq!(Some(10).diff(&Some(15)), Change::Some(Some(5)));
+    assert_eq!(Some(10).diff(&Some(15)), Change::Some(Some(15)));
     assert_eq!(None.apply_new(&Change::Some(Some(5))), Some(5));
     assert_eq!(Some(100).apply_new(&Change::Some(None)), None);
     assert_eq!(Some(20).diff(&Some(20)), Change::None);
@@ -70,7 +70,7 @@ fn test_maps() {
     let a = generate_map(vec![("a", 1), ("b", 2), ("x", 42)]);
     let b = generate_map(vec![("b", 3), ("c", 4), ("x", 42)]);
     let expected = HashMapDiff {
-        altered: generate_map(vec![("b", 1)]),
+        altered: generate_map(vec![("b", 3)]),
         added: generate_map(vec![("c", 4)]),
         removed: vec!["a"].into_iter().collect::<HashSet<_>>(),
     };
@@ -136,7 +136,7 @@ fn test_derive() {
 
     let diff = TestDiff {
         a: Change::Some(true),
-        b: Change::Some(1),
+        b: Change::Some(43),
     };
     assert_eq!(a.diff(&b), Change::Some(diff));
 
@@ -154,7 +154,7 @@ struct TestTupleStruct(i32);
 fn test_tuple_derive() {
     let a = TestTupleStruct(10);
     let b = TestTupleStruct(30);
-    let diff = TestTupleStructDiff(Change::Some(20));
+    let diff = TestTupleStructDiff(Change::Some(30));
     assert_eq!(a.diff(&b), Change::Some(diff));
 }
 
@@ -179,11 +179,12 @@ fn test_apply() {
     };
     let expected = ProjectMeta {
         contributors: vec!["Bob".into(), "Candice".into(), "Alice".into()],
-        combined_work_hours: 13,
+        combined_work_hours: 10,
     };
     let diff_a = base.diff(&contribution_a);
     let diff_b = base.diff(&contribution_b);
     base.apply(&diff_a);
+    assert_eq!(base, contribution_a);
     base.apply(&diff_b);
     assert_eq!(base, expected);
 }
@@ -200,7 +201,7 @@ fn test_vecs() {
         },
         VecDiffType::Altered {
             index: 6,
-            changes: vec![4], // add 4 to 6
+            changes: vec![10], // replace 4 by 10
         },
     ]));
     assert_eq!(diff, a.diff(&b));
@@ -218,11 +219,11 @@ fn test_arrays() {
         Change::Some(ArrayDiff(vec![
             ArrayDiffType {
                 index: 2,
-                change: 4
+                change: 7
             },
             ArrayDiffType {
                 index: 4,
-                change: -5
+                change: 0
             }
         ]))
     );
@@ -279,7 +280,7 @@ fn test_phantom_data() {
     assert_eq!(
         base.diff(&other),
         Change::Some(PhantomDataTestDiff::<String> {
-            value: Change::Some(42),
+            value: Change::Some(142),
             phantom: Default::default(),
         })
     );
@@ -300,11 +301,11 @@ fn test_box() {
         Change::Some(Box::new(Change::Some(ArrayDiff(vec![
             ArrayDiffType {
                 index: 2,
-                change: 4
+                change: 7
             },
             ArrayDiffType {
                 index: 4,
-                change: -5
+                change: 0
             }
         ]))))
     );
@@ -345,7 +346,7 @@ fn test_box_recursive() {
     assert_eq!(
         diff,
         Change::Some(LinkedListNodeDiff {
-            value: Change::Some(32),
+            value: Change::Some(42),
             child: Change::Some(Some(Box::new(Change::Some(LinkedListNodeDiff {
                 value: Change::None,
                 child: Change::Some(None)
@@ -369,7 +370,7 @@ fn test_rc() {
         diff,
         Change::Some(ArrayDiff(vec![ArrayDiffType {
             index: 4,
-            change: -5
+            change: 0
         },]))
     );
     assert_eq!(array.apply_new(&diff), other);
