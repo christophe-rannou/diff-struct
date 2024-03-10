@@ -22,25 +22,25 @@ pub trait Diff: Sized {
     }
 
     /// Applies the diff directly to the struct
-    fn apply(&mut self, diff: &Change<Self::Repr>);
+    fn apply(&mut self, diff: Change<Self::Repr>);
 
     /// Applies the diff directly to the struct, using an external diffing implementation
-    fn apply_custom<D: Differ<Self>>(&mut self, diff: &Change<D::Repr>, visitor: &D) {
+    fn apply_custom<D: Differ<Self>>(&mut self, diff: Change<D::Repr>, visitor: &D) {
         visitor.apply(self, diff)
     }
 
     /// Applies the diff to the struct and produces a new struct
-    fn apply_new(&self, diff: &Change<Self::Repr>) -> Self {
+    fn apply_new(&self, diff: Change<Self::Repr>) -> Self {
         let mut new = Self::identity();
-        new.apply(&new.diff(self));
+        new.apply(new.diff(self));
         new.apply(diff);
         new
     }
 
     /// Applies the diff to the struct and produces a new struct, using an external diffing implementation
-    fn apply_new_custom<D: Differ<Self>>(&self, diff: &Change<D::Repr>, visitor: &D) -> Self {
+    fn apply_new_custom<D: Differ<Self>>(&self, diff: Change<D::Repr>, visitor: &D) -> Self {
         let mut new = Self::identity();
-        new.apply_custom(&new.diff_custom(self, visitor), visitor);
+        new.apply_custom(new.diff_custom(self, visitor), visitor);
         new.apply_custom(diff, visitor);
         new
     }
@@ -50,7 +50,7 @@ pub trait Diff: Sized {
     /// use diff::Diff;
     /// let s = 42;
     /// let i = <i32 as Diff>::identity();
-    /// assert_eq!(i.apply_new(&i.diff(&s)), s);
+    /// assert_eq!(i.apply_new(i.diff(&s)), s);
     /// ```
     /// or mathematically speaking, `i + (s - i) = s`
     fn identity() -> Self;
@@ -62,5 +62,5 @@ pub trait Differ<T> {
 
     fn diff(&self, a: &T, b: &T) -> Change<Self::Repr>;
 
-    fn apply(&self, a: &mut T, b: &Change<Self::Repr>);
+    fn apply(&self, a: &mut T, b: Change<Self::Repr>);
 }

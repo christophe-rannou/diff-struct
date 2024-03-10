@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 fn identity_test<D: Diff + Debug + PartialEq>(s: D) {
-    assert_eq!(D::identity().apply_new(&D::identity().diff(&s)), s);
+    assert_eq!(D::identity().apply_new(D::identity().diff(&s)), s);
 }
 
 fn generate_map<K: Eq + Hash, V>(parts: Vec<(K, V)>) -> HashMap<K, V> {
@@ -59,8 +59,8 @@ fn test_cow() {
 #[test]
 fn test_opt() {
     assert_eq!(Some(10).diff(&Some(15)), Change::Some(Some(15)));
-    assert_eq!(None.apply_new(&Change::Some(Some(5))), Some(5));
-    assert_eq!(Some(100).apply_new(&Change::Some(None)), None);
+    assert_eq!(None.apply_new(Change::Some(Some(5))), Some(5));
+    assert_eq!(Some(100).apply_new(Change::Some(None)), None);
     assert_eq!(Some(20).diff(&Some(20)), Change::None);
     identity_test(Some(42))
 }
@@ -105,7 +105,7 @@ fn test_sets() {
     assert_eq!(diff, Change::Some(expected));
 
     let mut a_plus_diff = a;
-    a_plus_diff.apply(&diff);
+    a_plus_diff.apply(diff);
     assert_eq!(a_plus_diff, b);
 }
 
@@ -183,9 +183,9 @@ fn test_apply() {
     };
     let diff_a = base.diff(&contribution_a);
     let diff_b = base.diff(&contribution_b);
-    base.apply(&diff_a);
+    base.apply(diff_a);
     assert_eq!(base, contribution_a);
-    base.apply(&diff_b);
+    base.apply(diff_b);
     assert_eq!(base, expected);
 }
 
@@ -205,7 +205,7 @@ fn test_vecs() {
         },
     ]));
     assert_eq!(diff, a.diff(&b));
-    assert_eq!(a.apply_new(&diff), b);
+    assert_eq!(a.apply_new(diff), b);
 }
 
 #[test]
@@ -227,7 +227,7 @@ fn test_arrays() {
             }
         ]))
     );
-    assert_eq!(array.apply_new(&diff), other);
+    assert_eq!(array.apply_new(diff), other);
 }
 
 use serde::Serialize;
@@ -309,7 +309,7 @@ fn test_box() {
             }
         ]))))
     );
-    assert_eq!(array.apply_new(&diff), other);
+    assert_eq!(array.apply_new(diff), other);
 }
 
 #[derive(Debug, PartialEq, Diff)]
@@ -353,7 +353,7 @@ fn test_box_recursive() {
             })))),
         })
     );
-    assert_eq!(node.apply_new(&diff), other);
+    assert_eq!(node.apply_new(diff), other);
 }
 
 #[test]
@@ -373,5 +373,5 @@ fn test_rc() {
             change: 0
         },]))
     );
-    assert_eq!(array.apply_new(&diff), other);
+    assert_eq!(array.apply_new(diff), other);
 }

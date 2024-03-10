@@ -92,7 +92,7 @@ where
     T: Diff + Eq,
 {
     let diff = a.diff(&b);
-    a.apply(&diff);
+    a.apply(diff);
     a == b
 }
 
