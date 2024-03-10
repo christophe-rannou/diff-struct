@@ -37,16 +37,13 @@ fn numeric_diffs() {
 fn test_char_string() {
     identity_test('b');
     identity_test(String::from("42"));
-    assert_eq!('b'.diff(&'c'), Change::Change('c'));
-    assert_eq!('b'.diff(&'b'), Change::NoChange);
+    assert_eq!('b'.diff(&'c'), Change::Some('c'));
+    assert_eq!('b'.diff(&'b'), Change::None);
     assert_eq!(
         String::from("42").diff(&String::from("asdf")),
-        Change::Change(String::from("asdf"))
+        Change::Some(String::from("asdf"))
     );
-    assert_eq!(
-        String::from("42").diff(&String::from("42")),
-        Change::NoChange
-    );
+    assert_eq!(String::from("42").diff(&String::from("42")), Change::None);
 }
 
 #[test]
@@ -54,17 +51,17 @@ fn test_cow() {
     // Cow<'_, str>
     assert_eq!(
         Cow::from("42").diff(&Cow::from("asdf")),
-        Change::Change("asdf".into())
+        Change::Some("asdf".into())
     );
-    assert_eq!(Cow::from("42").diff(&Cow::from("42")), Change::NoChange);
+    assert_eq!(Cow::from("42").diff(&Cow::from("42")), Change::None);
 }
 
 #[test]
 fn test_opt() {
-    assert_eq!(Some(10).diff(&Some(15)), Change::Change(Some(5)));
-    assert_eq!(None.apply_new(&Change::Change(Some(5))), Some(5));
-    assert_eq!(Some(100).apply_new(&Change::Change(None)), None);
-    assert_eq!(Some(20).diff(&Some(20)), Change::NoChange);
+    assert_eq!(Some(10).diff(&Some(15)), Change::Some(Some(5)));
+    assert_eq!(None.apply_new(&Change::Some(Some(5))), Some(5));
+    assert_eq!(Some(100).apply_new(&Change::Some(None)), None);
+    assert_eq!(Some(20).diff(&Some(20)), Change::None);
     identity_test(Some(42))
 }
 
@@ -77,8 +74,21 @@ fn test_maps() {
         added: generate_map(vec![("c", 4)]),
         removed: vec!["a"].into_iter().collect::<HashSet<_>>(),
     };
-    assert_eq!(a.diff(&b), Change::Change(expected));
+    assert_eq!(a.diff(&b), Change::Some(expected));
     identity_test(a);
+
+    let a = generate_map(vec![
+        ("a", TestStruct { a: false, b: 42 }),
+        ("b", TestStruct { a: true, b: 42 }),
+        ("x", TestStruct { a: true, b: 42 }),
+    ]);
+    let b = generate_map(vec![
+        ("b", TestStruct { a: false, b: 37 }),
+        ("c", TestStruct { a: false, b: 37 }),
+        ("x", TestStruct { a: true, b: 42 }),
+    ]);
+    println!("{:?}", a.diff(&b));
+    println!("{}", serde_json::to_string_pretty(&a.diff(&b)).unwrap());
 }
 
 #[test]
@@ -92,7 +102,7 @@ fn test_sets() {
         added: vec![4].into_iter().collect::<HashSet<_>>(),
         removed: vec![2].into_iter().collect::<HashSet<_>>(),
     };
-    assert_eq!(diff, Change::Change(expected));
+    assert_eq!(diff, Change::Some(expected));
 
     let mut a_plus_diff = a;
     a_plus_diff.apply(&diff);
@@ -104,18 +114,18 @@ fn test_path() {
     let a = PathBuf::from(r"/example/path/to/file.ext");
     let b = PathBuf::from(r"/different/path");
     identity_test(a.clone());
-    assert_eq!(a.diff(&b), Change::Change(b.clone()));
+    assert_eq!(a.diff(&b), Change::Some(b.clone()));
 }
 
-#[derive(Debug, PartialEq, Diff)]
+#[derive(Clone, Debug, PartialEq, Diff, Serialize)]
 #[diff(attr(
-    #[derive(Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq, Serialize)]
 ))]
 #[diff(name(TestDiff))]
 #[diff(path(crate))]
 struct TestStruct {
     a: bool,
-    b: u32,
+    b: i32,
 }
 
 #[test]
@@ -125,10 +135,10 @@ fn test_derive() {
     let b = TestStruct { a: true, b: 43 };
 
     let diff = TestDiff {
-        a: Change::Change(true),
-        b: Change::Change(1),
+        a: Change::Some(true),
+        b: Change::Some(1),
     };
-    assert_eq!(a.diff(&b), Change::Change(diff));
+    assert_eq!(a.diff(&b), Change::Some(diff));
 
     identity_test(a);
 }
@@ -144,8 +154,8 @@ struct TestTupleStruct(i32);
 fn test_tuple_derive() {
     let a = TestTupleStruct(10);
     let b = TestTupleStruct(30);
-    let diff = TestTupleStructDiff(Change::Change(20));
-    assert_eq!(a.diff(&b), Change::Change(diff));
+    let diff = TestTupleStructDiff(Change::Some(20));
+    assert_eq!(a.diff(&b), Change::Some(diff));
 }
 
 #[derive(Debug, Default, PartialEq, Diff)]
@@ -182,7 +192,7 @@ fn test_apply() {
 fn test_vecs() {
     let a = vec![0, 1, 2, 3, 4, 5, 6, 7];
     let b = vec![0, /*1, 2*/ 3, 4, 42, 5, /*6 ->*/ 10, 7];
-    let diff = Change::Change(VecDiff(vec![
+    let diff = Change::Some(VecDiff(vec![
         VecDiffType::Removed { index: 1, len: 2 },
         VecDiffType::Inserted {
             index: 5,
@@ -205,7 +215,7 @@ fn test_arrays() {
     let diff = array.diff(&other);
     assert_eq!(
         diff,
-        Change::Change(ArrayDiff(vec![
+        Change::Some(ArrayDiff(vec![
             ArrayDiffType {
                 index: 2,
                 change: 4
@@ -245,7 +255,7 @@ fn test_full_struct() {
     let other = MyTestStruct { test_field: 1 };
 
     let diff = base.diff(&other);
-    assert_eq!(diff.unwrap().special_field_name, Change::Change(1));
+    assert_eq!(diff.unwrap().special_field_name, Change::Some(1));
 }
 
 #[derive(Diff, PartialEq)]
@@ -268,8 +278,8 @@ fn test_phantom_data() {
     };
     assert_eq!(
         base.diff(&other),
-        Change::Change(PhantomDataTestDiff::<String> {
-            value: Change::Change(42),
+        Change::Some(PhantomDataTestDiff::<String> {
+            value: Change::Some(42),
             phantom: Default::default(),
         })
     );
@@ -287,7 +297,7 @@ fn test_box() {
     let diff = array.diff(&other);
     assert_eq!(
         diff,
-        Change::Change(Box::new(Change::Change(ArrayDiff(vec![
+        Change::Some(Box::new(Change::Some(ArrayDiff(vec![
             ArrayDiffType {
                 index: 2,
                 change: 4
@@ -334,11 +344,11 @@ fn test_box_recursive() {
     let diff = node.diff(&other);
     assert_eq!(
         diff,
-        Change::Change(LinkedListNodeDiff {
-            value: Change::Change(32),
-            child: Change::Change(Some(Box::new(Change::Change(LinkedListNodeDiff {
-                value: Change::NoChange,
-                child: Change::Change(None)
+        Change::Some(LinkedListNodeDiff {
+            value: Change::Some(32),
+            child: Change::Some(Some(Box::new(Change::Some(LinkedListNodeDiff {
+                value: Change::None,
+                child: Change::Some(None)
             })))),
         })
     );
@@ -357,7 +367,7 @@ fn test_rc() {
     let diff = array.diff(&other);
     assert_eq!(
         diff,
-        Change::Change(ArrayDiff(vec![ArrayDiffType {
+        Change::Some(ArrayDiff(vec![ArrayDiffType {
             index: 4,
             change: -5
         },]))

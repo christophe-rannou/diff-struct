@@ -12,21 +12,22 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(untagged)]
 pub enum Change<T> {
-    Change(T),
+    Some(T),
     #[default]
-    NoChange,
+    None,
 }
 
 impl<T> Change<T> {
     pub fn no_change(&self) -> bool {
-        matches!(self, Change::NoChange)
+        matches!(self, Change::None)
     }
 
     pub fn unwrap(self) -> T {
         match self {
-            Change::Change(value) => value,
-            Change::NoChange => panic!("No change"),
+            Change::Some(value) => value,
+            Change::None => panic!("No change"),
         }
     }
 }
@@ -36,16 +37,16 @@ impl Diff for bool {
 
     fn diff(&self, other: &Self) -> Change<Self::Repr> {
         if self != other {
-            Change::Change(*other)
+            Change::Some(*other)
         } else {
-            Change::NoChange
+            Change::None
         }
     }
 
     fn apply(&mut self, diff: &Change<Self::Repr>) {
         match diff {
-            Change::Change(diff) => *self = *diff,
-            Change::NoChange => {}
+            Change::Some(diff) => *self = *diff,
+            Change::None => {}
         }
     }
 
@@ -87,13 +88,13 @@ where
     type Repr = Box<Change<T::Repr>>;
 
     fn diff(&self, other: &Self) -> Change<Self::Repr> {
-        Change::Change(Box::new(self.deref().diff(other.deref())))
+        Change::Some(Box::new(self.deref().diff(other.deref())))
     }
 
     fn apply(&mut self, diff: &Change<Self::Repr>) {
         match diff {
-            Change::Change(diff) => self.as_mut().apply(diff.as_ref()),
-            Change::NoChange => {}
+            Change::Some(diff) => self.as_mut().apply(diff.as_ref()),
+            Change::None => {}
         }
     }
 
@@ -138,18 +139,18 @@ macro_rules! diff_tuple {
             fn diff(&self, other: &Self) -> Change<Self::Repr> {
                 let diff_repr = ($(self.$access.diff(&other.$access)),*,);
                 if $(diff_repr.$access.no_change())&&* {
-                    Change::NoChange
+                    Change::None
                 } else {
-                    Change::Change(diff_repr)
+                    Change::Some(diff_repr)
                 }
             }
 
             fn apply(&mut self, diff: &Change<Self::Repr>) {
                 match diff {
-                    Change::Change(diff) => {
+                    Change::Some(diff) => {
                         $(self.$access.apply(&diff.$access));*;
                     }
-                    Change::NoChange => {}
+                    Change::None => {}
                 }
             }
 
@@ -214,16 +215,16 @@ macro_rules! diff_int {
             fn diff(&self, other: &Self) -> Change<Self::Repr> {
                 let value = other.wrapping_sub(*self);
                 if value != 0 {
-                    Change::Change(value)
+                    Change::Some(value)
                 } else {
-                    Change::NoChange
+                    Change::None
                 }
             }
 
             fn apply(&mut self, diff: &Change<Self::Repr>) {
                 match diff {
-                    Change::Change(diff) => *self = self.wrapping_add(*diff),
-                    Change::NoChange => {}
+                    Change::Some(diff) => *self = self.wrapping_add(*diff),
+                    Change::None => {}
                 }
             }
 
@@ -242,16 +243,16 @@ macro_rules! diff_float {
             fn diff(&self, other: &Self) -> Change<Self::Repr> {
                 let value = other - self;
                 if value != 0.0 {
-                    Change::Change(value)
+                    Change::Some(value)
                 } else {
-                    Change::NoChange
+                    Change::None
                 }
             }
 
             fn apply(&mut self, diff: &Change<Self::Repr>){
                 match diff {
-                    Change::Change(diff) => *self += diff,
-                    Change::NoChange => {}
+                    Change::Some(diff) => *self += diff,
+                    Change::None => {}
                 }
             }
 
@@ -273,16 +274,16 @@ macro_rules! diff_non_zero_int {
             fn diff(&self, other: &Self) -> Change<Self::Repr> {
                 let value = other.get().wrapping_sub(self.get());
                 if value != 0 {
-                    Change::Change(value)
+                    Change::Some(value)
                 } else {
-                    Change::NoChange
+                    Change::None
                 }
             }
 
             fn apply(&mut self, diff: &Change<Self::Repr>) {
                 match diff {
-                    Change::Change(diff) => *self = <$ty>::new(self.get() + *diff).unwrap(),
-                    Change::NoChange => {}
+                    Change::Some(diff) => *self = <$ty>::new(self.get() + *diff).unwrap(),
+                    Change::None => {}
                 }
             }
 
@@ -311,16 +312,16 @@ impl Diff for char {
 
     fn diff(&self, other: &Self) -> Change<Self::Repr> {
         if self != other {
-            Change::Change(*other)
+            Change::Some(*other)
         } else {
-            Change::NoChange
+            Change::None
         }
     }
 
     fn apply(&mut self, diff: &Change<Self::Repr>) {
         match diff {
-            Change::Change(diff) => *self = *diff,
-            Change::NoChange => {}
+            Change::Some(diff) => *self = *diff,
+            Change::None => {}
         }
     }
 
@@ -334,16 +335,16 @@ impl Diff for String {
 
     fn diff(&self, other: &Self) -> Change<Self::Repr> {
         if self != other {
-            Change::Change(other.clone())
+            Change::Some(other.clone())
         } else {
-            Change::NoChange
+            Change::None
         }
     }
 
     fn apply(&mut self, diff: &Change<Self::Repr>) {
         match diff {
-            Change::Change(diff) => *self = diff.clone(),
-            Change::NoChange => {}
+            Change::Some(diff) => *self = diff.clone(),
+            Change::None => {}
         }
     }
 
@@ -357,16 +358,16 @@ impl Diff for PathBuf {
 
     fn diff(&self, other: &Self) -> Change<Self::Repr> {
         if self != other {
-            Change::Change(other.clone())
+            Change::Some(other.clone())
         } else {
-            Change::NoChange
+            Change::None
         }
     }
 
     fn apply(&mut self, diff: &Change<Self::Repr>) {
         match diff {
-            Change::Change(diff) => *self = diff.clone(),
-            Change::NoChange => {}
+            Change::Some(diff) => *self = diff.clone(),
+            Change::None => {}
         }
     }
 
@@ -380,16 +381,16 @@ impl<'a> Diff for &'a str {
 
     fn diff(&self, other: &Self) -> Change<Self::Repr> {
         if self != other {
-            Change::Change(other)
+            Change::Some(other)
         } else {
-            Change::NoChange
+            Change::None
         }
     }
 
     fn apply(&mut self, diff: &Change<Self::Repr>) {
         match diff {
-            Change::Change(diff) => *self = diff,
-            Change::NoChange => {}
+            Change::Some(diff) => *self = diff,
+            Change::None => {}
         }
     }
 
@@ -410,16 +411,16 @@ where
 
     fn diff(&self, other: &Self) -> Change<Self::Repr> {
         if self != other {
-            Change::Change(other.clone().into_owned())
+            Change::Some(other.clone().into_owned())
         } else {
-            Change::NoChange
+            Change::None
         }
     }
 
     fn apply(&mut self, diff: &Change<Self::Repr>) {
         match diff {
-            Change::Change(diff) => *self = Cow::Owned(diff.clone()),
-            Change::NoChange => {}
+            Change::Some(diff) => *self = Cow::Owned(diff.clone()),
+            Change::None => {}
         }
     }
 
@@ -437,30 +438,30 @@ where
     fn diff(&self, other: &Self) -> Change<Self::Repr> {
         match (self, other) {
             (Some(value), Some(other_value)) => match value.diff(other_value) {
-                Change::Change(diff) => Change::Change(Some(diff)),
-                Change::NoChange => Change::NoChange,
+                Change::Some(diff) => Change::Some(Some(diff)),
+                Change::None => Change::None,
             },
-            (Some(_), None) => Change::Change(None),
+            (Some(_), None) => Change::Some(None),
             (None, Some(other_value)) => {
-                Change::Change(Some(T::identity().diff(other_value).unwrap()))
+                Change::Some(Some(T::identity().diff(other_value).unwrap()))
             }
-            (None, None) => Change::NoChange,
+            (None, None) => Change::None,
         }
     }
 
     fn apply(&mut self, diff: &Change<Self::Repr>) {
         match diff {
-            Change::Change(diff) => match diff.clone() {
+            Change::Some(diff) => match diff.clone() {
                 Some(change) => {
                     if let Some(value) = self {
-                        value.apply(&Change::Change(change));
+                        value.apply(&Change::Some(change));
                     } else {
-                        *self = Some(T::identity().apply_new(&Change::Change(change)))
+                        *self = Some(T::identity().apply_new(&Change::Some(change)))
                     }
                 }
                 None => *self = None,
             },
-            Change::NoChange => {}
+            Change::None => {}
         }
     }
 
@@ -518,10 +519,10 @@ macro_rules! diff_map {
                 for (key, value) in self {
                     if let Some(other_value) = other.get(key) {
                         match value.diff(other_value) {
-                            Change::Change(value_diff) => {
+                            Change::Some(value_diff) => {
                                 diff.altered.insert(key.clone(), value_diff);
                             }
-                            Change::NoChange => {}
+                            Change::None => {}
                         }
                     } else {
                         diff.removed.insert(key.clone());
@@ -533,16 +534,16 @@ macro_rules! diff_map {
                     }
                 }
                 if diff.altered.is_empty() && diff.added.is_empty() && diff.removed.is_empty() {
-                    Change::NoChange
+                    Change::None
                 } else {
-                    Change::Change(diff)
+                    Change::Some(diff)
                 }
             }
 
             // basically inexpensive
             fn apply(&mut self, diff: &Change<Self::Repr>) {
                 match diff {
-                    Change::Change(diff) => {
+                    Change::Some(diff) => {
                         diff.removed.iter().for_each(|del| {
                             self.remove(del);
                         });
@@ -551,13 +552,13 @@ macro_rules! diff_map {
                         }
                         for (key, change) in &diff.altered {
                             if let Some(original) = self.get_mut(key) {
-                                original.apply(&Change::Change(change.clone()));
+                                original.apply(&Change::Some(change.clone()));
                             } else {
-                                self.insert(key.clone(), V::identity().apply_new(&Change::Change(change.clone())));
+                                self.insert(key.clone(), V::identity().apply_new(&Change::Some(change.clone())));
                             }
                         }
                     }
-                    Change::NoChange => {}
+                    Change::None => {}
                 }
             }
 
@@ -657,16 +658,16 @@ macro_rules! diff_set {
                     }
                 }
                 if diff.added.is_empty() && diff.removed.is_empty() {
-                    Change::NoChange
+                    Change::None
                 } else {
-                    Change::Change(diff)
+                    Change::Some(diff)
                 }
             }
 
             // basically inexpensive
             fn apply(&mut self, diff: &Change<Self::Repr>) {
                 match diff {
-                    Change::Change(diff) => {
+                    Change::Some(diff) => {
                         diff.removed.iter().for_each(|del| {
                             self.remove(del);
                         });
@@ -674,7 +675,7 @@ macro_rules! diff_set {
                             self.insert(add.clone());
                         });
                     }
-                    Change::NoChange => {}
+                    Change::None => {}
                 }
             }
 
@@ -809,16 +810,16 @@ where
             }
         }
         if changes.is_empty() {
-            Change::NoChange
+            Change::None
         } else {
-            Change::Change(VecDiff(changes))
+            Change::Some(VecDiff(changes))
         }
     }
 
     fn apply(&mut self, diff: &Change<Self::Repr>) {
         let changes = match diff {
-            Change::Change(changes) => &changes.0,
-            Change::NoChange => return,
+            Change::Some(changes) => &changes.0,
+            Change::None => return,
         };
         let mut relative_index = 0_isize;
         for change in changes {
@@ -837,7 +838,7 @@ where
                     let index = (*index as isize + relative_index) as usize;
                     let range = index..index + changes.len();
                     for (value, diff) in self[range].iter_mut().zip(changes.iter()) {
-                        value.apply(&Change::Change(diff.clone()));
+                        value.apply(&Change::Some(diff.clone()));
                     }
                 }
             }
@@ -994,20 +995,20 @@ where
             })
             .collect::<Vec<ArrayDiffType<T>>>();
         if diffs.is_empty() {
-            Change::NoChange
+            Change::None
         } else {
-            Change::Change(ArrayDiff(diffs))
+            Change::Some(ArrayDiff(diffs))
         }
     }
 
     fn apply(&mut self, diff: &Change<Self::Repr>) {
         let diffs = match diff {
-            Change::Change(diffs) => &diffs.0,
-            Change::NoChange => return,
+            Change::Some(diffs) => &diffs.0,
+            Change::None => return,
         };
 
         for ArrayDiffType { index, change } in diffs {
-            self[*index].apply(&Change::Change(change.clone()));
+            self[*index].apply(&Change::Some(change.clone()));
         }
     }
 
@@ -1080,7 +1081,7 @@ impl<T> Diff for PhantomData<T> {
     type Repr = PhantomData<T>;
 
     fn diff(&self, _other: &Self) -> Change<Self::Repr> {
-        Change::NoChange
+        Change::None
     }
 
     fn apply(&mut self, _diff: &Change<Self::Repr>) {}
