@@ -58,8 +58,11 @@ fn test_cow() {
 
 #[test]
 fn test_opt() {
-    assert_eq!(Some(10).diff(&Some(15)), Change::Some(Some(15)));
-    assert_eq!(None.apply_new(Change::Some(Some(5))), Some(5));
+    assert_eq!(
+        Some(10).diff(&Some(15)),
+        Change::Some(Some(Change::Some(15)))
+    );
+    assert_eq!(None.apply_new(Change::Some(Some(Change::Some(5)))), Some(5));
     assert_eq!(Some(100).apply_new(Change::Some(None)), None);
     assert_eq!(Some(20).diff(&Some(20)), Change::None);
     identity_test(Some(42))
@@ -347,10 +350,12 @@ fn test_box_recursive() {
         diff,
         Change::Some(LinkedListNodeDiff {
             value: Change::Some(42),
-            child: Change::Some(Some(Box::new(Change::Some(LinkedListNodeDiff {
-                value: Change::None,
-                child: Change::Some(None)
-            })))),
+            child: Change::Some(Some(Change::Some(Box::new(Change::Some(
+                LinkedListNodeDiff {
+                    value: Change::None,
+                    child: Change::Some(None)
+                }
+            ))))),
         })
     );
     assert_eq!(node.apply_new(diff), other);

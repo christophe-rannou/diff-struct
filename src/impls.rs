@@ -427,18 +427,16 @@ where
 }
 
 impl<T: Diff + PartialEq> Diff for Option<T> {
-    type Repr = Option<T::Repr>;
+    type Repr = Option<Change<T::Repr>>;
 
     fn diff(&self, other: &Self) -> Change<Self::Repr> {
         match (self, other) {
             (Some(value), Some(other_value)) => match value.diff(other_value) {
-                Change::Some(diff) => Change::Some(Some(diff)),
+                diff @ Change::Some(_) => Change::Some(Some(diff)),
                 Change::None => Change::None,
             },
             (Some(_), None) => Change::Some(None),
-            (None, Some(other_value)) => {
-                Change::Some(Some(T::identity().diff(other_value).unwrap()))
-            }
+            (None, Some(other_value)) => Change::Some(Some(T::identity().diff(other_value))),
             (None, None) => Change::None,
         }
     }
@@ -448,9 +446,9 @@ impl<T: Diff + PartialEq> Diff for Option<T> {
             Change::Some(diff) => match diff {
                 Some(change) => {
                     if let Some(value) = self {
-                        value.apply(Change::Some(change));
+                        value.apply(change);
                     } else {
-                        *self = Some(T::identity().apply_new(Change::Some(change)))
+                        *self = Some(T::identity().apply_new(change))
                     }
                 }
                 None => *self = None,
