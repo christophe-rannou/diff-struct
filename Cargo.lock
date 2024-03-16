@@ -64,6 +64,7 @@ dependencies = [
 [[package]]
 name = "diff_derive"
 version = "0.2.3"
+source = "git+https://github.com/christophe-rannou/diff-derive?rev=e610ba1#e610ba1153c3ee2eadff66f53321fdfe70d29b6a"
 dependencies = [
  "proc-macro2 1.0.47",
  "quote 1.0.21",
